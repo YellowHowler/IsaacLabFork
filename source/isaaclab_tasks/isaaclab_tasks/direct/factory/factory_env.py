@@ -92,6 +92,8 @@ class FactoryEnv(DirectRLEnv):
         held_base_x_offset = 0.0
         if self.cfg_task.name == "peg_insert":
             held_base_z_offset = 0.0
+        elif self.cfg_task.name == "four_hole_insert":
+            held_base_z_offset = 0.0
         elif self.cfg_task.name == "gear_mesh":
             gear_base_offset = self._get_target_gear_base_offset()
             held_base_x_offset = gear_base_offset[0]
@@ -132,6 +134,8 @@ class FactoryEnv(DirectRLEnv):
         # Used to compute target poses.
         self.fixed_success_pos_local = torch.zeros((self.num_envs, 3), device=self.device)
         if self.cfg_task.name == "peg_insert":
+            self.fixed_success_pos_local[:, 2] = 0.0
+        elif self.cfg_task.name == "four_hole_insert":
             self.fixed_success_pos_local[:, 2] = 0.0
         elif self.cfg_task.name == "gear_mesh":
             gear_base_offset = self._get_target_gear_base_offset()
@@ -438,7 +442,7 @@ class FactoryEnv(DirectRLEnv):
         is_centered = torch.where(xy_dist < 0.0025, torch.ones_like(curr_successes), torch.zeros_like(curr_successes))
         # Height threshold to target
         fixed_cfg = self.cfg_task.fixed_asset_cfg
-        if self.cfg_task.name == "peg_insert" or self.cfg_task.name == "gear_mesh":
+        if self.cfg_task.name == "peg_insert" or self.cfg_task.name == "four_hole_insert" or self.cfg_task.name == "gear_mesh":
             height_threshold = fixed_cfg.height * success_threshold
         elif self.cfg_task.name == "nut_thread":
             height_threshold = fixed_cfg.thread_pitch * success_threshold
@@ -452,7 +456,7 @@ class FactoryEnv(DirectRLEnv):
         if check_rot:
             is_rotated = self.curr_yaw < self.cfg_task.ee_success_yaw
             curr_successes = torch.logical_and(curr_successes, is_rotated)
-
+        
         return curr_successes
 
     def _get_rewards(self):
@@ -605,6 +609,10 @@ class FactoryEnv(DirectRLEnv):
     def get_handheld_asset_relative_pose(self):
         """Get default relative pose between help asset and fingertip."""
         if self.cfg_task.name == "peg_insert":
+            held_asset_relative_pos = torch.zeros_like(self.held_base_pos_local)
+            held_asset_relative_pos[:, 2] = self.cfg_task.held_asset_cfg.height
+            held_asset_relative_pos[:, 2] -= self.cfg_task.robot_cfg.franka_fingerpad_length
+        elif self.cfg_task.name == "four_hole_insert":
             held_asset_relative_pos = torch.zeros_like(self.held_base_pos_local)
             held_asset_relative_pos[:, 2] = self.cfg_task.held_asset_cfg.height
             held_asset_relative_pos[:, 2] -= self.cfg_task.robot_cfg.franka_fingerpad_length

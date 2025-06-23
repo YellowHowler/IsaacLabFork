@@ -9,7 +9,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 
 ASSET_DIR = f"{ISAACLAB_NUCLEUS_DIR}/Factory"
-
+ASSET_FOURHOLE_DIR = f"../../../../../assets"
 
 @configclass
 class FixedAssetCfg:
@@ -182,6 +182,102 @@ class PegInsert(FactoryTask):
         actuators={},
     )
 
+@configclass
+class Inserter4Hole(HeldAssetCfg):
+    usd_path = f"{ASSET_FOURHOLE_DIR}/inserter_4_hole.usd"
+    diameter = 0.09
+    height = 0.01
+    mass = 0.019 # TODO: need exact measurement
+
+
+@configclass
+class Base4Hole(FixedAssetCfg):
+    usd_path = f"{ASSET_FOURHOLE_DIR}/base_4_hole.usd"
+    diameter = 0.09
+    height = 0.035
+    base_height = 0.01
+
+@configclass
+class FourHoleInsert(FactoryTask):
+    name = "four_hole_insert"
+    fixed_asset_cfg = Hole8mm()
+    held_asset_cfg = Peg8mm()
+    asset_size = 8.0
+    duration_s = 10.0
+
+    # Robot
+    hand_init_pos: list = [0.0, 0.0, 0.047]  # Relative to fixed asset tip.
+    hand_init_pos_noise: list = [0.02, 0.02, 0.01]
+    hand_init_orn: list = [3.1416, 0.0, 0.0]
+    hand_init_orn_noise: list = [0.0, 0.0, 0.785]
+
+    # Fixed Asset (applies to all tasks)
+    fixed_asset_init_pos_noise: list = [0.05, 0.05, 0.05]
+    fixed_asset_init_orn_deg: float = 0.0
+    fixed_asset_init_orn_range_deg: float = 360.0
+
+    # Held Asset (applies to all tasks)
+    held_asset_pos_noise: list = [0.003, 0.0, 0.003]  # noise level of the held asset in gripper
+    held_asset_rot_init: float = 0.0
+
+    # Rewards
+    keypoint_coef_baseline: list = [5, 4]
+    keypoint_coef_coarse: list = [50, 2]
+    keypoint_coef_fine: list = [100, 0]
+    # Fraction of socket height.
+    success_threshold: float = 0.04
+    engage_threshold: float = 0.9
+
+    fixed_asset: ArticulationCfg = ArticulationCfg(
+        prim_path="/World/envs/env_.*/FixedAsset",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=fixed_asset_cfg.usd_path,
+            activate_contact_sensors=True,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                max_depenetration_velocity=5.0,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=3666.0,
+                enable_gyroscopic_forces=True,
+                solver_position_iteration_count=192,
+                solver_velocity_iteration_count=1,
+                max_contact_impulse=1e32,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=fixed_asset_cfg.mass),
+            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+        ),
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.6, 0.0, 0.05), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
+        ),
+        actuators={},
+    )
+    held_asset: ArticulationCfg = ArticulationCfg(
+        prim_path="/World/envs/env_.*/HeldAsset",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=held_asset_cfg.usd_path,
+            activate_contact_sensors=True,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=True,
+                max_depenetration_velocity=5.0,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=3666.0,
+                enable_gyroscopic_forces=True,
+                solver_position_iteration_count=192,
+                solver_velocity_iteration_count=1,
+                max_contact_impulse=1e32,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=held_asset_cfg.mass),
+            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
+        ),
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.4, 0.1), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
+        ),
+        actuators={},
+    )
 
 @configclass
 class GearBase(FixedAssetCfg):

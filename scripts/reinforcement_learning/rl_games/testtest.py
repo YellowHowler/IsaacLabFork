@@ -216,6 +216,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
 
 if __name__ == "__main__":
+    print([env_spec.id for env_spec in gym.envs.registry.values()])
     # run the main function
     main()
     # close sim app

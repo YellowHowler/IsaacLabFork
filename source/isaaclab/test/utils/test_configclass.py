@@ -93,7 +93,7 @@ class ModifierCfg:
 
 @configclass
 class ViewerCfg:
-    eye: list = [7.5, 7.5, 7.5]  # field missing on purpose
+    eye: list = [7.5, 2.5, 2.5]  # field missing on purpose | default [7.5, 7.5, 7.5]
     lookat: list = field(default_factory=lambda: [0.0, 0.0, 0.0])
 
 

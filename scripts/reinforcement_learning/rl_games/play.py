@@ -109,6 +109,13 @@ def main():
     clip_obs = agent_cfg["params"]["env"].get("clip_observations", math.inf)
     clip_actions = agent_cfg["params"]["env"].get("clip_actions", math.inf)
 
+    # CUSTOM CAMERA POSITION FOR VIDEO
+    if args_cli.video:
+        env_cfg.viewer.resolution = (2560, 1440)
+        env_cfg.viewer.eye      = (1.0, 1.0, 1.0)   
+        env_cfg.viewer.lookat   = (0.0, 0.0, 0.0)   
+        env_cfg.viewer.cam_prim_path = "/OmniverseKit_Persp"  # default camera
+
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
@@ -160,6 +167,10 @@ def main():
     if isinstance(obs, dict):
         obs = obs["obs"]
     timestep = 0
+    
+    success_count = 0
+    engagement_count = 0
+
     # required: enables the flag for batched observations
     _ = agent.get_batch_size(obs, 1)
     # initialize RNN states if used
@@ -171,6 +182,7 @@ def main():
     #   operations such as masking that is used for multi-agent learning by RL-Games.
     while simulation_app.is_running():
         start_time = time.time()
+
         # run everything in inference mode
         with torch.inference_mode():
             # convert obs to agent format
@@ -178,7 +190,19 @@ def main():
             # agent stepping
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
             # env stepping
-            obs, _, dones, _ = env.step(actions)
+            obs, _ , dones, _ = env.step(actions)
+            timestep += 1
+
+            # get successes and engagements
+            curr_successes = env.unwrapped._get_curr_successes(success_threshold=env.unwrapped.cfg_task.success_threshold)
+
+            # update success and engagement counts
+            total_count = curr_successes.shape[0]
+            success_count = curr_successes.sum().item()
+
+            # print success and engagement rate every 100 timesteps
+            if timestep % 50 == 0:
+                print(f"Step {timestep}: Successes: {success_count}/{total_count}")
 
             # perform operations for terminated episodes
             if len(dones) > 0:
@@ -187,7 +211,6 @@ def main():
                     for s in agent.states:
                         s[:, dones, :] = 0.0
         if args_cli.video:
-            timestep += 1
             # Exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break

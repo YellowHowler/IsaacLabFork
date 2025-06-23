@@ -52,7 +52,7 @@ def configclass(cls, **kwargs):
 
         @configclass
         class ViewerCfg:
-            eye: list = [7.5, 7.5, 7.5]  # field missing on purpose
+            eye: list = [7.5, 7.5, 2.5]  # field missing on purpose
             lookat: list = field(default_factory=[0.0, 0.0, 0.0])
 
 
