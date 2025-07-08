@@ -18,6 +18,10 @@ OBS_DIM_CFG = {
     "fingertip_pos": 3,
     "fingertip_pos_rel_fixed": 3,
     "fingertip_quat": 4,
+    # CODE I WROTE
+    "joint_torque": 9,
+    "applied_wrench": 6,
+    # END OF CODE I WROTE
     "ee_linvel": 3,
     "ee_angvel": 3,
 }
@@ -26,6 +30,10 @@ STATE_DIM_CFG = {
     "fingertip_pos": 3,
     "fingertip_pos_rel_fixed": 3,
     "fingertip_quat": 4,
+    # CODE I WROTE
+    "joint_torque": 9,
+    "applied_wrench": 6,
+    # END OF CODE I WROTE
     "ee_linvel": 3,
     "ee_angvel": 3,
     "joint_pos": 7,
@@ -74,10 +82,23 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     # num_*: will be overwritten to correspond to obs_order, state_order.
     observation_space = 21
     state_space = 72
-    obs_order: list = ["fingertip_pos_rel_fixed", "fingertip_quat", "ee_linvel", "ee_angvel"]
+    obs_order: list = [
+        "fingertip_pos_rel_fixed", 
+        "fingertip_quat", 
+        # CODE I WROTE
+        "joint_torque",
+        "applied_wrench",
+        # END OF CODE I WROTE
+        "ee_linvel", 
+        "ee_angvel",
+    ]
     state_order: list = [
         "fingertip_pos",
         "fingertip_quat",
+        # CODE I WROTE
+        "joint_torque",
+        "applied_wrench",
+        # END OF CODE I WROTE
         "ee_linvel",
         "ee_angvel",
         "joint_pos",
@@ -88,7 +109,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         "fixed_quat",
     ]
 
-    task_name: str = "peg_insert"  # peg_insert, gear_mesh, nut_thread
+    task_name: str = "peg_insert"  # peg_insert, gear_mesh, nut_thread, four_hole_insert
     task: FactoryTask = FactoryTask()
     obs_rand: ObsRandCfg = ObsRandCfg()
     ctrl: CtrlCfg = CtrlCfg()
@@ -198,7 +219,7 @@ class FactoryTaskPegInsertCfg(FactoryEnvCfg):
 class FactoryTaskFourHoleInsertCfg(FactoryEnvCfg):
     task_name = "four_hole_insert"
     task = FourHoleInsert()
-    episode_length_s = 10.0
+    episode_length_s = 55.0
 
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):

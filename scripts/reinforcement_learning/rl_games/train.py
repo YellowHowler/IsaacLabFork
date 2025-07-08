@@ -56,6 +56,7 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
+
 import math
 import os
 import random
@@ -79,6 +80,9 @@ from isaaclab.utils.io import dump_pickle, dump_yaml
 from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 
 import isaaclab_tasks  # noqa: F401
+import isaaclab_tasks.direct.factory
+import inspect
+
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # PLACEHOLDER: Extension template (do not remove this comment)
@@ -147,8 +151,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # CUSTOM CAMERA POSITION FOR VIDEO
     if args_cli.video:
         env_cfg.viewer.resolution = (2560, 1440)
-        env_cfg.viewer.eye      = (1.0, 1.0, 1.0)   
-        env_cfg.viewer.lookat   = (0.0, 0.0, 0.0)   
+        env_cfg.viewer.eye      = (0.7, 0.3, 1.3)   
+        env_cfg.viewer.lookat   = (-1.2, 0.6, 0.0)   
         env_cfg.viewer.cam_prim_path = "/OmniverseKit_Persp"  # default camera
 
     # create isaac environment

@@ -1,0 +1,7 @@
+./isaaclabfork.sh -p scripts/reinforcement_learning/rl_games/train.py --task Isaac-Factory-FourHoleInsert-Direct-v0 --headless --video 
+
+./isaaclabfork.sh -p scripts/environments/teleoperation/teleop_se3_agent.py --task Isaac-Factory-FourHoleInsert-Direct-v0 --num_envs 1 --teleop_device spacemouse
+./isaaclabfork.sh -p scripts/environments/teleoperation/teleop_se3_agent.py --task Isaac-Factory-FourHoleInsert-Direct-v0 --num_envs 1 --teleop_device keyboard
+
+./isaaclabfork.sh -p scripts/environments/teleoperation/teleop_se3_agent.py --task Isaac-Factory-GearMesh-Direct-v0 --num_envs 1 --teleop_device keyboard
+./isaaclabfork.sh -p scripts/environments/teleoperation/teleop_se3_agent.py --task Isaac-Lift-Cube-Franka-IK-Rel-v0 --num_envs 1 --teleop_device keyboard

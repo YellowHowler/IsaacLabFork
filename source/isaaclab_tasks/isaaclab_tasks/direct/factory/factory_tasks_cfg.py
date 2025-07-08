@@ -8,8 +8,10 @@ from isaaclab.assets import ArticulationCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 
+import os
+
 ASSET_DIR = f"{ISAACLAB_NUCLEUS_DIR}/Factory"
-ASSET_FOURHOLE_DIR = f"../../../../../assets"
+ASSET_FOURHOLE_DIR = os.path.join(os.environ["ISAACLAB_PATH"], "assets")
 
 @configclass
 class FixedAssetCfg:
@@ -95,7 +97,7 @@ class Peg8mm(HeldAssetCfg):
 @configclass
 class Hole8mm(FixedAssetCfg):
     usd_path = f"{ASSET_DIR}/factory_hole_8mm.usd"
-    diameter = 0.0081
+    width = 0.0081
     height = 0.025
     base_height = 0.0
 
@@ -185,7 +187,8 @@ class PegInsert(FactoryTask):
 @configclass
 class Inserter4Hole(HeldAssetCfg):
     usd_path = f"{ASSET_FOURHOLE_DIR}/inserter_4_hole.usd"
-    diameter = 0.09
+    width = 0.07
+    length = 0.07
     height = 0.01
     mass = 0.019 # TODO: need exact measurement
 
@@ -193,17 +196,18 @@ class Inserter4Hole(HeldAssetCfg):
 @configclass
 class Base4Hole(FixedAssetCfg):
     usd_path = f"{ASSET_FOURHOLE_DIR}/base_4_hole.usd"
-    diameter = 0.09
-    height = 0.035
-    base_height = 0.01
+    width = 0.1
+    length = 0.1
+    height = 0.06
+    base_height = 0.02
 
 @configclass
 class FourHoleInsert(FactoryTask):
     name = "four_hole_insert"
-    fixed_asset_cfg = Hole8mm()
-    held_asset_cfg = Peg8mm()
+    fixed_asset_cfg = Base4Hole()
+    held_asset_cfg = Inserter4Hole()
     asset_size = 8.0
-    duration_s = 10.0
+    duration_s = 55.0
 
     # Robot
     hand_init_pos: list = [0.0, 0.0, 0.047]  # Relative to fixed asset tip.
@@ -212,7 +216,7 @@ class FourHoleInsert(FactoryTask):
     hand_init_orn_noise: list = [0.0, 0.0, 0.785]
 
     # Fixed Asset (applies to all tasks)
-    fixed_asset_init_pos_noise: list = [0.05, 0.05, 0.05]
+    fixed_asset_init_pos_noise: list = [0.05, 0.05, 0.0]
     fixed_asset_init_orn_deg: float = 0.0
     fixed_asset_init_orn_range_deg: float = 360.0
 
@@ -221,11 +225,13 @@ class FourHoleInsert(FactoryTask):
     held_asset_rot_init: float = 0.0
 
     # Rewards
+    action_penalty_scale: 0.1
+    action_grad_penalty_scale: 0.05
     keypoint_coef_baseline: list = [5, 4]
     keypoint_coef_coarse: list = [50, 2]
     keypoint_coef_fine: list = [100, 0]
     # Fraction of socket height.
-    success_threshold: float = 0.04
+    success_threshold: float = 0.4
     engage_threshold: float = 0.9
 
     fixed_asset: ArticulationCfg = ArticulationCfg(
@@ -249,7 +255,7 @@ class FourHoleInsert(FactoryTask):
             collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.6, 0.0, 0.05), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
+            pos=(0.6, 0.0, 0.0), rot=(1.0, 0.0, 0.0, 0.0), joint_pos={}, joint_vel={}
         ),
         actuators={},
     )

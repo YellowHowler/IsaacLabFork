@@ -93,7 +93,7 @@ class FactoryEnv(DirectRLEnv):
         if self.cfg_task.name == "peg_insert":
             held_base_z_offset = 0.0
         elif self.cfg_task.name == "four_hole_insert":
-            held_base_z_offset = 0.0
+            held_base_z_offset = self.cfg_task.fixed_asset_cfg.base_height
         elif self.cfg_task.name == "gear_mesh":
             gear_base_offset = self._get_target_gear_base_offset()
             held_base_x_offset = gear_base_offset[0]
@@ -136,7 +136,7 @@ class FactoryEnv(DirectRLEnv):
         if self.cfg_task.name == "peg_insert":
             self.fixed_success_pos_local[:, 2] = 0.0
         elif self.cfg_task.name == "four_hole_insert":
-            self.fixed_success_pos_local[:, 2] = 0.0
+            self.fixed_success_pos_local[:, 2] = self.cfg_task.fixed_asset_cfg.base_height
         elif self.cfg_task.name == "gear_mesh":
             gear_base_offset = self._get_target_gear_base_offset()
             self.fixed_success_pos_local[:, 0] = gear_base_offset[0]
@@ -151,6 +151,15 @@ class FactoryEnv(DirectRLEnv):
 
         self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
+
+        self.is_misaligned = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+
+        self.min_xy_dist = torch.tensor(0.001, device=self.device)
+        self.min_z_disp = torch.tensor(0.01, device=self.device)
+        self.min_rot_error_angle = torch.tensor(0.05, device=self.device)
+
+        self.prev_force = torch.zeros(self.num_envs, device=self.device)
+        
 
     def _get_keypoint_offsets(self, num_keypoints):
         """Get uniformly-spaced keypoints along a line of unit length, centered at 0."""
@@ -265,6 +274,10 @@ class FactoryEnv(DirectRLEnv):
             "fingertip_pos": self.fingertip_midpoint_pos,
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
             "fingertip_quat": self.fingertip_midpoint_quat,
+            # CODE I WROTE
+            "joint_torque": self.joint_torque,
+            "applied_wrench": self.applied_wrench,
+            # END OF CODE I WROTE
             "ee_linvel": self.ee_linvel_fd,
             "ee_angvel": self.ee_angvel_fd,
             "prev_actions": prev_actions,
@@ -274,6 +287,10 @@ class FactoryEnv(DirectRLEnv):
             "fingertip_pos": self.fingertip_midpoint_pos,
             "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - self.fixed_pos_obs_frame,
             "fingertip_quat": self.fingertip_midpoint_quat,
+            # CODE I WROTE
+            "joint_torque": self.joint_torque,
+            "applied_wrench": self.applied_wrench,
+            # END OF CODE I WROTE
             "ee_linvel": self.fingertip_midpoint_linvel,
             "ee_angvel": self.fingertip_midpoint_angvel,
             "joint_pos": self.joint_pos[:, 0:7],
@@ -297,12 +314,134 @@ class FactoryEnv(DirectRLEnv):
         """Reset buffers."""
         self.ep_succeeded[env_ids] = 0
 
+    def _check_rot_alignment(self, threshold=0.3):
+        """Check if the gripper is aligned with the target orientation."""
+        # Compute the quaternion difference (relative rotation)
+        relative_quat = torch_utils.quat_mul(torch_utils.quat_conjugate(self.target_held_base_quat), self.held_base_quat)
+        
+        # Convert quaternion to axis-angle representation
+        rot_error_aa = axis_angle_from_quat(relative_quat)
+        rot_error_angle = torch.norm(rot_error_aa, p=2, dim=-1) % np.pi  # This is the angle of rotation
+
+        # If the rotational error is within the tolerance, the gripper is aligned
+        return_tensor = torch.where(rot_error_angle < threshold, torch.full_like(rot_error_angle, 1.0), torch.full_like(rot_error_angle, 0.0))
+
+        return return_tensor
+
+    def _rotate_gripper_to_target(self):
+        """Apply rotation action to gripper to achieve target orientation."""
+        # Calculate quaternion difference to rotate the gripper to the target orientation
+        rotation_diff = torch_utils.quat_mul(self.held_base_quat, self.target_held_base_quat)
+
+        # Convert the quaternion difference to axis-angle (rotation)
+        rotation_aa = axis_angle_from_quat(rotation_diff)
+        # Apply this rotation to the gripper
+        # The rotation is encoded as an axis-angle action (angle and axis of rotation)
+        self.actions[:, 3:6] = rotation_aa  
+
+        # Update gripper target quaternion 
+        self.ctrl_target_fingertip_midpoint_quat = self.target_held_base_quat
+
+        self.generate_ctrl_signals()  # Apply the action to rotate the gripper
+
+    def _check_pos_xy_alignment(self, threshold1=0.003, threshold2=0.0055):
+        """Check if the gripper's XY position is aligned with the target XY position."""
+        xy_dist = torch.norm(self.held_base_pos[:, 0:2] - self.target_held_base_pos[:, 0:2], dim=-1)
+        return_tensor = torch.where(xy_dist < threshold1, torch.full_like(xy_dist, 1.0), torch.full_like(xy_dist, 0.0))
+        return_tensor = torch.where(
+            (xy_dist >= threshold1) & (xy_dist < threshold2),
+            torch.full_like(xy_dist, 0.5),
+            return_tensor
+        )
+        return return_tensor
+    
+    def _move_gripper_to_target_xy(self):
+        """Move the gripper to the target XY position using velocity control."""
+        # Compute the position error in XY
+        xy_error = self.target_held_base_pos[:, 0:2] - self.held_base_pos[:, 0:2]
+
+        # Update the action based on the smoothed velocity in XY
+        self.actions[:, 0:2] += xy_error  # Move the gripper by the velocity
+
+        # Call the function to apply the action and generate the control signals
+        self.generate_ctrl_signals()  # Apply the action to rotate the gripper or move to the target
+
     def _pre_physics_step(self, action):
         """Apply policy actions with smoothing."""
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(env_ids) > 0:
             self._reset_buffers(env_ids)
+        
+        # if self.cfg_task.name == "four_hole_insert":
+        #     # Check gripper alignment for all environments (misaligned or not)
+        #     # xy_misaligned = ~self._check_pos_xy_alignment()
+        #     # rot_misaligned = ~self._check_rot_alignment()
 
+        #     target_pos = self.target_held_base_pos
+        #     #target_pos[:, 2] += self.cfg_task.fixed_asset_cfg.height
+        #     pos_error = target_pos
+            
+        #     relative_quat = torch_utils.quat_mul(torch_utils.quat_conjugate(self.held_base_quat), self.target_held_base_quat)
+        #     rot_error_aa = axis_angle_from_quat(relative_quat)
+
+        #     target_rot = torch.stack(torch_utils.get_euler_xyz(self.fixed_quat), dim=1)
+
+        #     # Move and rotate gripper only for misaligned environments
+        #     for env_id in range(self.num_envs):
+        #         if self.is_misaligned[env_id]:
+        #             if self._check_pos_xy_alignment(env_id) and self._check_rot_alignment(env_id):
+        #                 action[env_id, 0:3] = pos_error[env_id]
+        #                 action[env_id, 3:6] = rot_error_aa[env_id]
+        #             else:
+        #                 self.is_misaligned[env_id] = False
+
+        #MY CODE
+        if self.cfg_task.name == "four_hole_insert":
+            xy_dist = torch.linalg.vector_norm(self.target_held_base_pos[:, 0:2] - self.held_base_pos[:, 0:2], dim=1)
+            centered_envs = xy_dist < 0.005
+            
+            force_drop_threshold = 0.6  # TODO: tune this value based on observation
+            force_magnitude = torch.abs(self.applied_wrench[:, 2])
+            #print(f"force: {force_magnitude[:5]}")
+
+            # # Scale XY and rotation if force is large (>1); make search more extreme
+            # high_force_envs = (force_magnitude > 1.0).nonzero(as_tuple=False).squeeze(-1)
+            # if high_force_envs.numel() > 0:
+            #     # Scale x, y (index 0:2) and rotation (index 3:6)
+            #     action[high_force_envs, 0:2] *= 3.0
+            #     action[high_force_envs, 3:6] *= 5.0
+
+            #     # Clamp to [-1.0, 1.0]
+            #     action[high_force_envs, 0:2] = torch.clamp(self.actions[high_force_envs, 0:2], -1.0, 1.0)
+            #     action[high_force_envs, 3:6] = torch.clamp(self.actions[high_force_envs, 3:6], -1.0, 1.0)
+
+            force_diff = self.prev_force - force_magnitude
+            force_drop_envs = force_diff > force_drop_threshold
+
+            curr_successes = self._get_curr_successes(
+                success_threshold=self.cfg_task.success_threshold, check_rot=False
+            )
+            curr_engaged = self._get_curr_successes(
+                success_threshold=self.cfg_task.engage_threshold, check_rot=False
+            )
+
+            # Mark environments that experienced a sudden drop
+            trigger_envs = (centered_envs & force_drop_envs & ~curr_successes).nonzero(as_tuple=False).squeeze(-1)
+
+            # print(trigger_envs)
+
+            # # Replace action for those envs
+            # if trigger_envs.numel() > 0:
+            #     # Go straight down
+            #     action[trigger_envs, 0:3] = 0.0
+            #     action[trigger_envs, 2] = -1.0  # Z-down
+
+            self.prev_force = force_magnitude.clone()
+
+            action[curr_engaged & ~curr_successes, 2] = torch.clamp(action[curr_engaged & ~curr_successes, 2], max=-0.5)
+        #MY CODE END
+
+        # Apply smoothing for the action
         self.actions = (
             self.cfg.ctrl.ema_factor * action.clone().to(self.device) + (1 - self.cfg.ctrl.ema_factor) * self.actions
         )
@@ -432,25 +571,31 @@ class FactoryEnv(DirectRLEnv):
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         return time_out, time_out
 
-    def _get_curr_successes(self, success_threshold, check_rot=False):
+    def _get_curr_successes(self, success_threshold, check_rot=False, centered_threshold=0.0025):
         """Get success mask at current timestep."""
         curr_successes = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
 
         xy_dist = torch.linalg.vector_norm(self.target_held_base_pos[:, 0:2] - self.held_base_pos[:, 0:2], dim=1)
         z_disp = self.held_base_pos[:, 2] - self.target_held_base_pos[:, 2]
 
-        is_centered = torch.where(xy_dist < 0.0025, torch.ones_like(curr_successes), torch.zeros_like(curr_successes))
+        #print(f"z disp: {z_disp}, success threshold: {success_threshold}, xy_dist: {xy_dist}")
+
+        is_centered = torch.where(xy_dist < centered_threshold, torch.ones_like(curr_successes), torch.zeros_like(curr_successes))
         # Height threshold to target
         fixed_cfg = self.cfg_task.fixed_asset_cfg
-        if self.cfg_task.name == "peg_insert" or self.cfg_task.name == "four_hole_insert" or self.cfg_task.name == "gear_mesh":
+        if self.cfg_task.name == "peg_insert" or self.cfg_task.name == "gear_mesh":
             height_threshold = fixed_cfg.height * success_threshold
+        elif self.cfg_task.name == "four_hole_insert":
+            height_threshold = fixed_cfg.height * success_threshold + self.cfg_task.fixed_asset_cfg.base_height
         elif self.cfg_task.name == "nut_thread":
             height_threshold = fixed_cfg.thread_pitch * success_threshold
         else:
             raise NotImplementedError("Task not implemented")
+        
         is_close_or_below = torch.where(
             z_disp < height_threshold, torch.ones_like(curr_successes), torch.zeros_like(curr_successes)
         )
+
         curr_successes = torch.logical_and(is_centered, is_close_or_below)
 
         if check_rot:
@@ -495,7 +640,11 @@ class FactoryEnv(DirectRLEnv):
         # Keypoint rewards.
         def squashing_fn(x, a, b):
             return 1 / (torch.exp(a * x) + b + torch.exp(-a * x))
-
+        
+        def smooth_reward(x, a, b):
+            """Exponential falloff reward"""
+            return torch.exp(-a * x) / (b + 1.0)
+        
         a0, b0 = self.cfg_task.keypoint_coef_baseline
         rew_dict["kp_baseline"] = squashing_fn(self.keypoint_dist, a0, b0)
         # a1, b1 = 25, 2
@@ -506,27 +655,183 @@ class FactoryEnv(DirectRLEnv):
         rew_dict["kp_fine"] = squashing_fn(self.keypoint_dist, a2, b2)
 
         # Action penalties.
-        rew_dict["action_penalty"] = torch.norm(self.actions, p=2)
-        rew_dict["action_grad_penalty"] = torch.norm(self.actions - self.prev_actions, p=2, dim=-1)
-        rew_dict["curr_engaged"] = (
-            self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False).clone().float()
+        # Action cost (optional)
+        action_norm = torch.norm(self.actions, dim=-1)
+        action_delta = torch.norm(self.actions - self.prev_actions, dim=-1)
+        rew_dict["action_penalty"] = action_norm
+        rew_dict["action_grad_penalty"] = action_delta
+        curr_engaged = (
+            self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
         )
+        rew_dict["curr_engaged"] = curr_engaged.clone().float()
         rew_dict["curr_successes"] = curr_successes.clone().float()
 
-        rew_buf = (
-            rew_dict["kp_coarse"]
-            + rew_dict["kp_baseline"]
-            + rew_dict["kp_fine"]
-            - rew_dict["action_penalty"] * self.cfg_task.action_penalty_scale
-            - rew_dict["action_grad_penalty"] * self.cfg_task.action_grad_penalty_scale
-            + rew_dict["curr_engaged"]
-            + rew_dict["curr_successes"]
-        )
+        if self.cfg_task.name == "four_hole_insert":
+            # # Compute positional reward
+            # xy_dist = torch.norm(self.held_pos[:, 0:2] - self.fixed_pos[:, 0:2], dim=-1)
+            # xy_dist = torch.max(xy_dist, self.min_xy_dist)
+            # rew_dict["pos_xy_baseline_reward"] = squashing_fn(xy_dist, 25, 4)
+            # rew_dict["pos_xy_baseline_reward"] = torch.clamp(rew_dict["pos_xy_baseline_reward"], max=2.0)
+            # rew_dict["pos_xy_coarse_reward"] = squashing_fn(xy_dist, 55, 2)
+            # rew_dict["pos_xy_coarse_reward"] = torch.clamp(rew_dict["pos_xy_coarse_reward"], max=2.0)
+            # rew_dict["pos_xy_fine_reward"] = squashing_fn(xy_dist, 305, 0)
+            # rew_dict["pos_xy_fine_reward"] = torch.clamp(rew_dict["pos_xy_fine_reward"], max=2.0)
+            # #0.005 / (0.005 + xy_dist)
+
+            # # Compute rotational reward
+            # relative_quat = torch_utils.quat_mul(
+            #     torch_utils.quat_conjugate(self.held_quat), self.fixed_quat
+            # )
+            # rot_error_aa = axis_angle_from_quat(relative_quat)
+            # rot_error_angle = torch.norm(rot_error_aa, p=2, dim=-1) % np.pi # The magnitude of the rotation error
+            # rot_error_angle_comp = torch.pi - rot_error_angle
+            # rot_error_angle = torch.min(rot_error_angle, rot_error_angle_comp)
+            # rot_error_angle = torch.max(rot_error_angle, self.min_rot_error_angle) 
+            # #rew_dict["rot_reward"] = 10 / self.max_rotation * (self.prev_rotational_error - rot_error_angle)
+            # #rew_dict["rot_reward"] = torch.where(rew_dict["rot_reward"] < 0, rew_dict["rot_reward"] * 2, rew_dict["rot_reward"])
+            # rew_dict["rot_reward"] = 0.01 / (0.5 + rot_error_angle)
+            # self.prev_rotational_error = rot_error_angle
+            # #squashing_fn(rot_error_angle, 20, 4)
+            # #0.2 / (0.5 + rot_error_angle)
+
+            # rew_dict["rot_penalty"] = (1.0 - self._check_rot_alignment()) * 0.04
+            # rew_dict["pos_xy_penalty"] = (1.0 - self._check_pos_xy_alignment()) * 0.04
+
+            # # compute z displacement reward
+            # z_disp = torch.max(self.held_pos[:, 2] - self.fixed_pos[:, 2] + self.cfg_task.fixed_asset_cfg.height, self.min_z_disp) #CHANGE
+            # rew_dict["pos_z_reward_xy"] = 0.005 / (0.005 + z_disp)
+            # rew_dict["pos_z_reward_xy"] = torch.where(xy_dist > 0.03, torch.zeros_like(xy_dist), rew_dict["pos_z_reward_xy"])
+            # rew_dict["pos_z_reward_xy"] = torch.clamp(rew_dict["pos_z_reward_xy"], max=1.0)
+
+            # rew_dict["pos_z_reward_rot"] = 0.05 / (0.05 + z_disp)
+            # rew_dict["pos_z_reward_rot"] = torch.where(rot_error_angle > self.cfg_task.hand_init_orn_noise[2], torch.zeros_like(xy_dist), rew_dict["pos_z_reward_rot"])
+
+            # # encourage searching
+            # cur_contacted = self._get_curr_successes(
+            #     success_threshold=1.2, check_rot=False, centered_threshold=0.02
+            # )
+            # rew_dict["curr_contacted"] = cur_contacted.clone().float()
+            # #print(f"current contacts: {rew_dict['curr_contacted'].sum()}/{self.num_envs}")
+            # rew_dict["search_reward"] = torch.norm(self.actions, dim=-1)/12 #0~0.5
+            # rew_dict["search_reward"] = torch.where(~curr_engaged & cur_contacted, rew_dict["search_reward"], torch.zeros_like(rew_dict["search_reward"]))
+
+            # self.cfg_task.action_penalty_scale = 0.0
+            # self.cfg_task.action_grad_penalty_scale = 0.0
+
+            # if(rew_dict['curr_successes'].sum() > 0.0):
+            #     print(f"engaged: {rew_dict['curr_engaged'].sum()}/{self.num_envs}, successes: {rew_dict['curr_successes'].sum()}/{self.num_envs}")
+            
+            # # print(f"[[xy dist: {xy_dist[0]}, rot_error_angle: {rot_error_angle[0]}, z disp: {z_disp[0]}]]")
+            # # print(f"kp_coarse: {rew_dict['kp_coarse'][0]}, "
+            # #         f"kp_baseline: {rew_dict['kp_baseline'][0]}, "
+            # #         f"kp_fine: {rew_dict['kp_fine'][0]}, "
+            # #         f"pos_xy_baseline_reward: {rew_dict['pos_xy_baseline_reward'][0]}, "
+            # #         f"pos_xy_coarse_reward: {rew_dict['pos_xy_coarse_reward'][0]}, "
+            # #         f"pos_xy_fine_reward: {rew_dict['pos_xy_fine_reward'][0]}, "
+            # #         f"pos_z_reward: {rew_dict['pos_z_reward'][0]}, "
+            # #         f"rot_reward: {rew_dict['rot_reward'][0]}, "
+            # #         f"curr_engaged: {rew_dict['curr_engaged'].sum()}, "
+            # #         f"curr_successes: {rew_dict['curr_successes'].sum()}, "
+            # #         f"action_penalty: {(rew_dict['action_penalty'] * self.cfg_task.action_penalty_scale)[0]}, "
+            # #         f"action_grad_penalty: {(rew_dict['action_grad_penalty'] * self.cfg_task.action_grad_penalty_scale)[0]}")
+            # rew_buf = (
+            #     - rew_dict["action_penalty"] * self.cfg_task.action_penalty_scale
+            #     - rew_dict["action_grad_penalty"] * self.cfg_task.action_grad_penalty_scale
+            #     + rew_dict["curr_contacted"]
+            #     + rew_dict["curr_engaged"] * 3
+            #     + rew_dict["curr_successes"] * 2
+            #     + rew_dict["search_reward"]
+            #     #- rew_dict["force_reward"]
+            #     + rew_dict["pos_z_reward_xy"]
+            #     #+ rew_dict["pos_z_reward_rot"]
+            #     + rew_dict["pos_xy_baseline_reward"]
+            #     + rew_dict["pos_xy_coarse_reward"]
+            #     #+ rew_dict["pos_xy_fine_reward"]
+            #     #+ rew_dict["rot_reward"]
+            #     #- rew_dict["rot_penalty"] #uncomment if doesn't work
+            #     #- rew_dict["pos_xy_penalty"]
+            # )
+
+            # XY distance reward (multi-scale)
+            xy_dist = torch.norm(self.held_pos[:, :2] - self.fixed_pos[:, :2], dim=-1)
+            xy_dist = torch.max(xy_dist, self.min_xy_dist)
+
+            rew_dict["xy_reward"] = (
+                smooth_reward(xy_dist, 30, 0) * 1.0 +
+                smooth_reward(xy_dist, 80, 0) * 1.5
+            )
+            rew_dict["xy_reward"] = torch.clamp(rew_dict["xy_reward"], max=2.0)
+
+            # Rotational reward
+            relative_quat = torch_utils.quat_mul(
+                torch_utils.quat_conjugate(self.held_quat), self.fixed_quat
+            )
+            rot_error_aa = axis_angle_from_quat(relative_quat)
+            rot_error_angle = torch.norm(rot_error_aa, dim=-1) % torch.pi
+            rot_error_angle = torch.min(rot_error_angle, torch.pi - rot_error_angle)
+            rot_error_angle = torch.max(rot_error_angle, self.min_rot_error_angle)
+
+            rew_dict["rot_reward"] = smooth_reward(rot_error_angle, 15, 0)
+            rew_dict["rot_reward"] = torch.clamp(rew_dict["rot_reward"], max=1.0)
+
+            # Z insertion reward (enabled only if XY is good)
+            z_disp = self.held_pos[:, 2] - self.fixed_pos[:, 2]
+            z_disp = torch.max(z_disp, self.min_z_disp)
+
+            xy_gate = torch.clamp((0.05 - xy_dist) / 0.05, 0.0, 1.0)
+            rew_dict["z_reward"] = (0.01 / (0.01 + z_disp)) * xy_gate
+
+            # Search encouragement (if contacted but not yet engaged)
+            cur_contacted = self._get_curr_successes(success_threshold=1.2, check_rot=False, centered_threshold=0.02)
+            rew_dict["curr_contacted"] = cur_contacted.clone().float()
+
+            action_search_norm = torch.norm(self.actions[:, [0, 1, 3, 4, 5]])
+            rew_dict["search_reward"] = torch.where(
+                (~curr_engaged & cur_contacted),
+                action_norm / 12,
+                torch.zeros_like(action_norm)
+            )
+
+            if(rew_dict['curr_successes'].sum() > 0.0):
+                print(f"engaged: {rew_dict['curr_engaged'].sum()}/{self.num_envs}, successes: {rew_dict['curr_successes'].sum()}/{self.num_envs}")
+
+            # Final reward sum
+            rew_buf = (
+                - rew_dict["action_penalty"] * self.cfg_task.action_penalty_scale
+                - rew_dict["action_grad_penalty"] * self.cfg_task.action_grad_penalty_scale
+                + rew_dict["xy_reward"] * 1.0
+                + rew_dict["rot_reward"] * 0.5
+                + rew_dict["z_reward"] * 1.5
+                + rew_dict["curr_contacted"] * 0.5
+                + rew_dict["curr_engaged"] * 2.0
+                + rew_dict["curr_successes"] * 3.0
+                + rew_dict["search_reward"] * 1.0
+            )
+        else:
+            rew_buf = (
+                rew_dict["kp_coarse"]
+                + rew_dict["kp_baseline"]
+                + rew_dict["kp_fine"]
+                - rew_dict["action_penalty"] * self.cfg_task.action_penalty_scale
+                - rew_dict["action_grad_penalty"] * self.cfg_task.action_grad_penalty_scale
+                + rew_dict["curr_engaged"]
+                + rew_dict["curr_successes"]
+                + rew_dict["pos_xy_reward"]
+            )
 
         for rew_name, rew in rew_dict.items():
             self.extras[f"logs_rew_{rew_name}"] = rew.mean()
 
         return rew_buf
+    
+    def _move_robot_to_target_pos(self, env_id, target_pos, target_rot):
+        """
+        Move the robot to the desired initial position and orientation before training.
+        This ensures the robot starts in the correct pose.
+        """
+        
+        self.actions[env_id, 0:3] = target_pos
+        self.actions[env_id, 3:6] = target_rot
 
     def _reset_idx(self, env_ids):
         """
@@ -642,7 +947,10 @@ class FactoryEnv(DirectRLEnv):
 
     def _set_franka_to_default_pose(self, joints, env_ids):
         """Return Franka to its default joint position."""
-        gripper_width = self.cfg_task.held_asset_cfg.diameter / 2 * 1.25
+        if self.cfg_task.name == "four_hole_insert":
+            gripper_width = self.cfg_task.held_asset_cfg.width / 2 * 1.25
+        else: 
+            gripper_width = self.cfg_task.held_asset_cfg.diameter / 2 * 1.25
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_pos[:, 7:] = gripper_width  # MIMIC
         joint_pos[:, :7] = torch.tensor(joints, device=self.device)[None, :]
@@ -770,6 +1078,27 @@ class FactoryEnv(DirectRLEnv):
             )
 
             ik_attempt += 1
+        
+        # TODO: find more convenient area to place
+        self.fixed_pos = self._fixed_asset.data.root_pos_w - self.scene.env_origins
+        self.fixed_quat = self._fixed_asset.data.root_quat_w
+
+        self.held_pos = self._held_asset.data.root_pos_w - self.scene.env_origins
+        self.held_quat = self._held_asset.data.root_quat_w
+
+        relative_quat = torch_utils.quat_mul(
+            torch_utils.quat_conjugate(self.held_quat), self.fixed_quat
+        )
+        rot_error_aa = axis_angle_from_quat(relative_quat)
+        rot_error_angle = torch.norm(rot_error_aa, p=2, dim=-1) % (np.pi/2) # The magnitude of the rotation error
+        rot_error_angle_comp = torch.tensor(np.pi/2) - rot_error_angle
+        rot_error_angle = torch.min(rot_error_angle, rot_error_angle_comp)
+        rot_error_angle = torch.max(rot_error_angle, torch.tensor(0.05))
+        self.prev_rotational_error = rot_error_angle
+        self.max_rotation = rot_error_angle
+
+        if self.cfg_task.name == "four_hole_insert":
+            pass
 
         self.step_sim_no_action()
 
@@ -892,3 +1221,11 @@ class FactoryEnv(DirectRLEnv):
         self._set_gains(self.default_gains)
 
         physics_sim_view.set_gravity(carb.Float3(*self.cfg.sim.gravity))
+
+
+        # target_pos = self.fixed_pos
+        # #target_pos[:, 2] += self.cfg_task.fixed_asset_cfg.base_height + self.cfg_task.fixed_asset_cfg.height
+        # target_rot = torch.stack(torch_utils.get_euler_xyz(self.fixed_quat), dim=1)
+
+        # if self.cfg_task.name == "four_hole_insert":
+        #     self._move_robot_to_target_pos(target_pos, target_rot)

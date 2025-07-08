@@ -49,6 +49,11 @@ import gymnasium as gym
 import numpy as np
 import torch
 
+import math
+import os
+import random
+from datetime import datetime
+
 import omni.log
 
 if "handtracking" in args_cli.teleop_device.lower():
@@ -66,6 +71,29 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from isaaclab_tasks.utils import parse_env_cfg
 
+# My code
+from isaaclab.utils.assets import retrieve_file_path
+from isaaclab.utils.dict import print_dict
+from isaaclab.utils.io import dump_pickle, dump_yaml
+
+from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
+
+from rl_games.common import env_configurations, vecenv
+from rl_games.common.algo_observer import IsaacAlgoObserver
+from rl_games.torch_runner import Runner
+
+from isaaclab.envs import (
+    DirectMARLEnv,
+    DirectMARLEnvCfg,
+    DirectRLEnvCfg,
+    ManagerBasedRLEnvCfg,
+    multi_agent_to_single_agent,
+)
+
+from isaaclab_tasks.utils.hydra import hydra_task_config
+import isaaclab_tasks  # noqa: F401
+import isaaclab_tasks.direct.factory
+# MY CODE END
 
 def pre_process_actions(
     teleop_data: tuple[np.ndarray, bool] | list[tuple[np.ndarray, np.ndarray, np.ndarray]], num_envs: int, device: str
@@ -80,11 +108,20 @@ def pre_process_actions(
     Returns:
         Processed actions as a tensor.
     """
+
     # compute actions based on environment
-    if "Reach" in args_cli.task:
+    if "Reach" in args_cli.task or "Factory" in args_cli.task:
         delta_pose, gripper_command = teleop_data
         # convert to torch
         delta_pose = torch.tensor(delta_pose, dtype=torch.float, device=device).repeat(num_envs, 1)
+        # note: reach is the only one that uses a different action space
+        # compute actions
+        return delta_pose
+    elif "Factory" in args_cli.task:
+        delta_pose, gripper_command = teleop_data
+        # convert to torch
+        delta_pose = torch.tensor(delta_pose, dtype=torch.float, device=device).repeat(num_envs, 1)
+        #delta_pose = delta_pose * 10
         # note: reach is the only one that uses a different action space
         # compute actions
         return delta_pose
@@ -112,23 +149,34 @@ def pre_process_actions(
         # compute actions
         return torch.concat([delta_pose, gripper_vel], dim=1)
 
-
 def main():
     """Running keyboard teleoperation with Isaac Lab manipulation environment."""
     # parse configuration
-    env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
+    env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs = args_cli.num_envs)
     env_cfg.env_name = args_cli.task
+
     # modify configuration
-    env_cfg.terminations.time_out = None
+    if "Factory" in args_cli.task:
+        # specify directory for logging experiments
+        config_name = args_cli.task
+        log_root_path = os.path.join("logs", "teleoperation", config_name)
+        log_root_path = os.path.abspath(log_root_path)
+    else: 
+        env_cfg.terminations.time_out = None
+
+    print(f"This is args cli task: {args_cli.task}")
+
     if "Lift" in args_cli.task:
         # set the resampling time range to large number to avoid resampling
         env_cfg.commands.object_pose.resampling_time_range = (1.0e9, 1.0e9)
         # add termination condition for reaching the goal otherwise the environment won't reset
         env_cfg.terminations.object_reached_goal = DoneTerm(func=mdp.object_reached_goal)
+    
     # create environment
     env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
+    
     # check environment name (for reach , we don't allow the gripper)
-    if "Reach" in args_cli.task:
+    if "Reach" in args_cli.task or "Factory" in args_cli.task:
         omni.log.warn(
             f"The environment '{args_cli.task}' does not support gripper control. The device command will be ignored."
         )
@@ -182,9 +230,14 @@ def main():
 
     # create controller
     if args_cli.teleop_device.lower() == "keyboard":
-        teleop_interface = Se3Keyboard(
-            pos_sensitivity=0.05 * args_cli.sensitivity, rot_sensitivity=0.05 * args_cli.sensitivity
-        )
+        if "Factory" in args_cli.task:
+            teleop_interface = Se3Keyboard(
+                pos_sensitivity=0.7 * args_cli.sensitivity, rot_sensitivity=0.7 * args_cli.sensitivity
+            )
+        else:
+            teleop_interface = Se3Keyboard(
+                pos_sensitivity=0.05 * args_cli.sensitivity, rot_sensitivity=0.05 * args_cli.sensitivity
+            )
     elif args_cli.teleop_device.lower() == "spacemouse":
         teleop_interface = Se3SpaceMouse(
             pos_sensitivity=0.05 * args_cli.sensitivity, rot_sensitivity=0.05 * args_cli.sensitivity
@@ -213,7 +266,6 @@ def main():
 
         # Hand tracking needs explicit start gesture to activate
         teleoperation_active = False
-
     elif "handtracking" in args_cli.teleop_device.lower():
         # Create EE retargeter with desired configuration
         if "_abs" in args_cli.teleop_device.lower():
@@ -249,8 +301,16 @@ def main():
     print(teleop_interface)
 
     # reset environment
-    env.reset()
+    obs = env.reset()
     teleop_interface.reset()
+
+    if "Factory" in args_cli.task:
+        if isinstance(obs, dict):
+            obs = obs["obs"]
+    
+    timestep = 0
+    trajectory_episodes = []
+    current_episode = []
 
     # simulate environment
     while simulation_app.is_running():
@@ -258,26 +318,53 @@ def main():
         with torch.inference_mode():
             # get device command
             teleop_data = teleop_interface.advance()
+            #print(f"teleop data: {teleop_data}")
 
             # Only apply teleop commands when active
             if teleoperation_active:
                 # compute actions based on environment
                 actions = pre_process_actions(teleop_data, env.num_envs, env.device)
-                # apply actions
+                # env stepping
                 env.step(actions)
+                timestep += 1
+
+                obs = env._get_observations()
+                
+                if(torch.norm(actions, dim=-1) > 0.00001):
+                    current_episode.append({
+                        "obs": obs["policy"].clone().cpu(),
+                        "state": obs["critic"].clone().cpu(),
+                        "action": actions.clone().cpu()
+                    })
+
             else:
                 env.sim.render()
 
             if should_reset_recording_instance:
-                env.reset()
+                # set up recording for new episode
+                if len(current_episode) > 0:
+                    trajectory_episodes.append(current_episode)
+                current_episode = []
+
+                # reset environment
+                obs = env.reset()
                 should_reset_recording_instance = False
+
+    
+    if len(current_episode) > 0:
+        trajectory_episodes.append(current_episode)
+
+    # save trajectory data
+    os.makedirs(log_root_path, exist_ok=True)
+    filename = os.path.join(log_root_path, "teleop_multi_episode_trajectory.pth")
+    torch.save(trajectory_episodes, filename)
+    print(f"[INFO] Saved teleop data to: {filename}")
 
     # close the simulator
     env.close()
 
-
 if __name__ == "__main__":
     # run the main function
     main()
-    # close sim app
+   
     simulation_app.close()
