@@ -178,6 +178,13 @@ full:
       episode_length: 130
     upper_thresholds:
       duration: 4000
+  Isaac-Factory-PushT-Direct-v0:
+    max_iterations: 150
+    lower_thresholds:
+      reward: 125
+      episode_length: 130
+    upper_thresholds:
+      duration: 4000
   Isaac-Franka-Cabinet-Direct-v0:
     max_iterations: 300
     lower_thresholds:

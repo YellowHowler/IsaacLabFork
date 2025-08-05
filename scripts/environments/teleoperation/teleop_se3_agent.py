@@ -232,7 +232,7 @@ def main():
     if args_cli.teleop_device.lower() == "keyboard":
         if "Factory" in args_cli.task:
             teleop_interface = Se3Keyboard(
-                pos_sensitivity=0.7 * args_cli.sensitivity, rot_sensitivity=0.7 * args_cli.sensitivity
+                pos_sensitivity=0.9 * args_cli.sensitivity, rot_sensitivity=1.2 * args_cli.sensitivity
             )
         else:
             teleop_interface = Se3Keyboard(
@@ -329,13 +329,11 @@ def main():
                 timestep += 1
 
                 obs = env._get_observations()
-                
-                if(torch.norm(actions, dim=-1) > 0.00001):
-                    current_episode.append({
-                        "obs": obs["policy"].clone().cpu(),
-                        "state": obs["critic"].clone().cpu(),
-                        "action": actions.clone().cpu()
-                    })
+                current_episode.append({
+                    "obs": obs["policy"].clone().cpu(),
+                    "state": obs["critic"].clone().cpu(),
+                    "action": actions.clone().cpu()
+                })
 
             else:
                 env.sim.render()

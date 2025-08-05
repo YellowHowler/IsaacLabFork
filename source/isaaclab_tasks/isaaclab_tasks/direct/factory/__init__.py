@@ -7,7 +7,7 @@ import gymnasium as gym
 
 from . import agents
 from .factory_env import FactoryEnv
-from .factory_env_cfg import FactoryTaskGearMeshCfg, FactoryTaskNutThreadCfg, FactoryTaskPegInsertCfg, FactoryTaskFourHoleInsertCfg
+from .factory_env_cfg import FactoryTaskGearMeshCfg, FactoryTaskNutThreadCfg, FactoryTaskPegInsertCfg, FactoryTaskFourHoleInsertCfg, FactoryTaskPushTCfg
 
 ##
 # Register Gym environments.
@@ -23,13 +23,22 @@ gym.register(
     },
 )
 
-print("Hi im being imported")
 gym.register(
     id="Isaac-Factory-FourHoleInsert-Direct-v0",
     entry_point="isaaclab_tasks.direct.factory:FactoryEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": FactoryTaskFourHoleInsertCfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Isaac-Factory-PushT-Direct-v0",
+    entry_point="isaaclab_tasks.direct.factory:FactoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": FactoryTaskPushTCfg,
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )

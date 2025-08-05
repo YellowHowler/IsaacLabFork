@@ -17,20 +17,26 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import axis_angle_from_quat
 
 from . import factory_control as fc
-from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
-
+from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, OBS_DIM_CFG_FORCE, STATE_DIM_CFG_FORCE, FactoryEnvCfg
 
 class FactoryEnv(DirectRLEnv):
     cfg: FactoryEnvCfg
 
     def __init__(self, cfg: FactoryEnvCfg, render_mode: str | None = None, **kwargs):
-        # Update number of obs/states
-        cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order])
-        cfg.state_space = sum([STATE_DIM_CFG[state] for state in cfg.state_order])
-        cfg.observation_space += cfg.action_space
-        cfg.state_space += cfg.action_space
         self.cfg_task = cfg.task
 
+        print(OBS_DIM_CFG)
+        
+        # Update number of obs/states
+        if self.cfg_task.name != "four_hole_insert":
+            cfg.observation_space = sum([OBS_DIM_CFG[obs] for obs in cfg.obs_order])
+            cfg.state_space = sum([STATE_DIM_CFG[state] for state in cfg.state_order])
+        else:
+            cfg.observation_space = sum([OBS_DIM_CFG_FORCE[obs] for obs in cfg.obs_order_force])
+            cfg.state_space = sum([STATE_DIM_CFG_FORCE[state] for state in cfg.state_order_force])
+        cfg.observation_space += cfg.action_space
+        cfg.state_space += cfg.action_space
+    
         super().__init__(cfg, render_mode, **kwargs)
 
         self._set_body_inertias()
@@ -100,6 +106,8 @@ class FactoryEnv(DirectRLEnv):
             held_base_z_offset = gear_base_offset[2]
         elif self.cfg_task.name == "nut_thread":
             held_base_z_offset = self.cfg_task.fixed_asset_cfg.base_height
+        elif self.cfg_task.name == "push_t":
+            held_base_z_offset = self.cfg_task.fixed_asset_cfg.base_height
         else:
             raise NotImplementedError("Task not implemented")
 
@@ -146,6 +154,8 @@ class FactoryEnv(DirectRLEnv):
             shank_length = self.cfg_task.fixed_asset_cfg.height
             thread_pitch = self.cfg_task.fixed_asset_cfg.thread_pitch
             self.fixed_success_pos_local[:, 2] = head_height + shank_length - thread_pitch * 1.5
+        elif self.cfg_task.name == "push_t":
+            self.fixed_success_pos_local[:, 2] = self.cfg_task.fixed_asset_cfg.base_height
         else:
             raise NotImplementedError("Task not implemented")
 
@@ -270,40 +280,68 @@ class FactoryEnv(DirectRLEnv):
 
         prev_actions = self.actions.clone()
 
-        obs_dict = {
-            "fingertip_pos": self.fingertip_midpoint_pos,
-            "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
-            "fingertip_quat": self.fingertip_midpoint_quat,
-            # CODE I WROTE
-            "joint_torque": self.joint_torque,
-            "applied_wrench": self.applied_wrench,
-            # END OF CODE I WROTE
-            "ee_linvel": self.ee_linvel_fd,
-            "ee_angvel": self.ee_angvel_fd,
-            "prev_actions": prev_actions,
-        }
+        if self.cfg_task.name != "four_hole_insert":
+            obs_dict = {
+                "fingertip_pos": self.fingertip_midpoint_pos,
+                "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
+                "fingertip_quat": self.fingertip_midpoint_quat,
+                "ee_linvel": self.ee_linvel_fd,
+                "ee_angvel": self.ee_angvel_fd,
+                "prev_actions": prev_actions,
+            }
 
-        state_dict = {
-            "fingertip_pos": self.fingertip_midpoint_pos,
-            "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - self.fixed_pos_obs_frame,
-            "fingertip_quat": self.fingertip_midpoint_quat,
-            # CODE I WROTE
-            "joint_torque": self.joint_torque,
-            "applied_wrench": self.applied_wrench,
-            # END OF CODE I WROTE
-            "ee_linvel": self.fingertip_midpoint_linvel,
-            "ee_angvel": self.fingertip_midpoint_angvel,
-            "joint_pos": self.joint_pos[:, 0:7],
-            "held_pos": self.held_pos,
-            "held_pos_rel_fixed": self.held_pos - self.fixed_pos_obs_frame,
-            "held_quat": self.held_quat,
-            "fixed_pos": self.fixed_pos,
-            "fixed_quat": self.fixed_quat,
-            "task_prop_gains": self.task_prop_gains,
-            "pos_threshold": self.pos_threshold,
-            "rot_threshold": self.rot_threshold,
-            "prev_actions": prev_actions,
-        }
+            state_dict = {
+                "fingertip_pos": self.fingertip_midpoint_pos,
+                "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - self.fixed_pos_obs_frame,
+                "fingertip_quat": self.fingertip_midpoint_quat,
+                "ee_linvel": self.fingertip_midpoint_linvel,
+                "ee_angvel": self.fingertip_midpoint_angvel,
+                "joint_pos": self.joint_pos[:, 0:7],
+                "held_pos": self.held_pos,
+                "held_pos_rel_fixed": self.held_pos - self.fixed_pos_obs_frame,
+                "held_quat": self.held_quat,
+                "fixed_pos": self.fixed_pos,
+                "fixed_quat": self.fixed_quat,
+                "task_prop_gains": self.task_prop_gains,
+                "pos_threshold": self.pos_threshold,
+                "rot_threshold": self.rot_threshold,
+                "prev_actions": prev_actions,
+            }
+        else:
+            obs_dict = {
+                "fingertip_pos": self.fingertip_midpoint_pos,
+                "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - noisy_fixed_pos,
+                "fingertip_quat": self.fingertip_midpoint_quat,
+                # CODE I WROTE
+                "joint_torque": self.joint_torque,
+                "applied_wrench": self.applied_wrench,
+                # END OF CODE I WROTE
+                "ee_linvel": self.ee_linvel_fd,
+                "ee_angvel": self.ee_angvel_fd,
+                "prev_actions": prev_actions,
+            }
+
+            state_dict = {
+                "fingertip_pos": self.fingertip_midpoint_pos,
+                "fingertip_pos_rel_fixed": self.fingertip_midpoint_pos - self.fixed_pos_obs_frame,
+                "fingertip_quat": self.fingertip_midpoint_quat,
+                # CODE I WROTE
+                "joint_torque": self.joint_torque,
+                "applied_wrench": self.applied_wrench,
+                # END OF CODE I WROTE
+                "ee_linvel": self.fingertip_midpoint_linvel,
+                "ee_angvel": self.fingertip_midpoint_angvel,
+                "joint_pos": self.joint_pos[:, 0:7],
+                "held_pos": self.held_pos,
+                "held_pos_rel_fixed": self.held_pos - self.fixed_pos_obs_frame,
+                "held_quat": self.held_quat,
+                "fixed_pos": self.fixed_pos,
+                "fixed_quat": self.fixed_quat,
+                "task_prop_gains": self.task_prop_gains,
+                "pos_threshold": self.pos_threshold,
+                "rot_threshold": self.rot_threshold,
+                "prev_actions": prev_actions,
+            }
         obs_tensors = [obs_dict[obs_name] for obs_name in self.cfg.obs_order + ["prev_actions"]]
         obs_tensors = torch.cat(obs_tensors, dim=-1)
         state_tensors = [state_dict[state_name] for state_name in self.cfg.state_order + ["prev_actions"]]
@@ -371,75 +409,32 @@ class FactoryEnv(DirectRLEnv):
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(env_ids) > 0:
             self._reset_buffers(env_ids)
-        
+
+        # #MY CODE
         # if self.cfg_task.name == "four_hole_insert":
-        #     # Check gripper alignment for all environments (misaligned or not)
-        #     # xy_misaligned = ~self._check_pos_xy_alignment()
-        #     # rot_misaligned = ~self._check_rot_alignment()
-
-        #     target_pos = self.target_held_base_pos
-        #     #target_pos[:, 2] += self.cfg_task.fixed_asset_cfg.height
-        #     pos_error = target_pos
+        #     xy_dist = torch.linalg.vector_norm(self.target_held_base_pos[:, 0:2] - self.held_base_pos[:, 0:2], dim=1)
+        #     centered_envs = xy_dist < 0.005
             
-        #     relative_quat = torch_utils.quat_mul(torch_utils.quat_conjugate(self.held_base_quat), self.target_held_base_quat)
-        #     rot_error_aa = axis_angle_from_quat(relative_quat)
+        #     force_drop_threshold = 0.6  # TODO: tune this value based on observation
+        #     force_magnitude = torch.abs(self.applied_wrench[:, 2])
+        
+        #     force_diff = self.prev_force - force_magnitude
+        #     force_drop_envs = force_diff > force_drop_threshold
 
-        #     target_rot = torch.stack(torch_utils.get_euler_xyz(self.fixed_quat), dim=1)
+        #     curr_successes = self._get_curr_successes(
+        #         success_threshold=self.cfg_task.success_threshold, check_rot=False
+        #     )
+        #     curr_engaged = self._get_curr_successes(
+        #         success_threshold=self.cfg_task.engage_threshold, check_rot=False
+        #     )
 
-        #     # Move and rotate gripper only for misaligned environments
-        #     for env_id in range(self.num_envs):
-        #         if self.is_misaligned[env_id]:
-        #             if self._check_pos_xy_alignment(env_id) and self._check_rot_alignment(env_id):
-        #                 action[env_id, 0:3] = pos_error[env_id]
-        #                 action[env_id, 3:6] = rot_error_aa[env_id]
-        #             else:
-        #                 self.is_misaligned[env_id] = False
+        #     # Mark environments that experienced a sudden drop
+        #     trigger_envs = (centered_envs & force_drop_envs & ~curr_successes).nonzero(as_tuple=False).squeeze(-1)
 
-        #MY CODE
-        if self.cfg_task.name == "four_hole_insert":
-            xy_dist = torch.linalg.vector_norm(self.target_held_base_pos[:, 0:2] - self.held_base_pos[:, 0:2], dim=1)
-            centered_envs = xy_dist < 0.005
-            
-            force_drop_threshold = 0.6  # TODO: tune this value based on observation
-            force_magnitude = torch.abs(self.applied_wrench[:, 2])
-            #print(f"force: {force_magnitude[:5]}")
+        #     self.prev_force = force_magnitude.clone()
 
-            # # Scale XY and rotation if force is large (>1); make search more extreme
-            # high_force_envs = (force_magnitude > 1.0).nonzero(as_tuple=False).squeeze(-1)
-            # if high_force_envs.numel() > 0:
-            #     # Scale x, y (index 0:2) and rotation (index 3:6)
-            #     action[high_force_envs, 0:2] *= 3.0
-            #     action[high_force_envs, 3:6] *= 5.0
-
-            #     # Clamp to [-1.0, 1.0]
-            #     action[high_force_envs, 0:2] = torch.clamp(self.actions[high_force_envs, 0:2], -1.0, 1.0)
-            #     action[high_force_envs, 3:6] = torch.clamp(self.actions[high_force_envs, 3:6], -1.0, 1.0)
-
-            force_diff = self.prev_force - force_magnitude
-            force_drop_envs = force_diff > force_drop_threshold
-
-            curr_successes = self._get_curr_successes(
-                success_threshold=self.cfg_task.success_threshold, check_rot=False
-            )
-            curr_engaged = self._get_curr_successes(
-                success_threshold=self.cfg_task.engage_threshold, check_rot=False
-            )
-
-            # Mark environments that experienced a sudden drop
-            trigger_envs = (centered_envs & force_drop_envs & ~curr_successes).nonzero(as_tuple=False).squeeze(-1)
-
-            # print(trigger_envs)
-
-            # # Replace action for those envs
-            # if trigger_envs.numel() > 0:
-            #     # Go straight down
-            #     action[trigger_envs, 0:3] = 0.0
-            #     action[trigger_envs, 2] = -1.0  # Z-down
-
-            self.prev_force = force_magnitude.clone()
-
-            action[curr_engaged & ~curr_successes, 2] = torch.clamp(action[curr_engaged & ~curr_successes, 2], max=-0.5)
-        #MY CODE END
+        #     action[curr_engaged & ~curr_successes, 2] = torch.clamp(action[curr_engaged & ~curr_successes, 2], max=-0.5)
+        # #MY CODE END
 
         # Apply smoothing for the action
         self.actions = (
@@ -571,7 +566,7 @@ class FactoryEnv(DirectRLEnv):
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         return time_out, time_out
 
-    def _get_curr_successes(self, success_threshold, check_rot=False, centered_threshold=0.0025):
+    def _get_curr_successes(self, success_threshold, check_height=True, check_rot=False, centered_threshold=0.0025):
         """Get success mask at current timestep."""
         curr_successes = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
 
@@ -589,17 +584,24 @@ class FactoryEnv(DirectRLEnv):
             height_threshold = fixed_cfg.height * success_threshold + self.cfg_task.fixed_asset_cfg.base_height
         elif self.cfg_task.name == "nut_thread":
             height_threshold = fixed_cfg.thread_pitch * success_threshold
+        elif self.cfg_task.name == "push_t":
+            # No height threshold
+            pass
         else:
             raise NotImplementedError("Task not implemented")
         
-        is_close_or_below = torch.where(
-            z_disp < height_threshold, torch.ones_like(curr_successes), torch.zeros_like(curr_successes)
-        )
-
-        curr_successes = torch.logical_and(is_centered, is_close_or_below)
+        curr_successes = is_centered
+        
+        if check_height:
+            is_close_or_below = torch.where(
+                z_disp < height_threshold, torch.ones_like(curr_successes), torch.zeros_like(curr_successes)
+            )
+        
+            curr_successes = torch.logical_and(curr_successes, is_close_or_below)
 
         if check_rot:
             is_rotated = self.curr_yaw < self.cfg_task.ee_success_yaw
+            
             curr_successes = torch.logical_and(curr_successes, is_rotated)
         
         return curr_successes
@@ -607,9 +609,11 @@ class FactoryEnv(DirectRLEnv):
     def _get_rewards(self):
         """Update rewards and compute success statistics."""
         # Get successful and failed envs at current timestep
-        check_rot = self.cfg_task.name == "nut_thread"
+        check_height = self.cfg_task.name != "push_t"
+        check_rot = self.cfg_task.name == "nut_thread" or self.cfg_task.name == "push_t"
         curr_successes = self._get_curr_successes(
-            success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
+            success_threshold=self.cfg_task.success_threshold, 
+            check_height=check_height, check_rot=check_rot
         )
 
         rew_buf = self._update_rew_buf(curr_successes)
@@ -656,102 +660,21 @@ class FactoryEnv(DirectRLEnv):
 
         # Action penalties.
         # Action cost (optional)
-        action_norm = torch.norm(self.actions, dim=-1)
-        action_delta = torch.norm(self.actions - self.prev_actions, dim=-1)
+        action_norm = torch.norm(self.actions, dim=-1, p=2)
+        action_delta = torch.norm(self.actions - self.prev_actions, dim=-1, p=2)
         rew_dict["action_penalty"] = action_norm
         rew_dict["action_grad_penalty"] = action_delta
+
+        # Current engagement and successes
+        check_height = self.cfg_task.name != "push_t"
         curr_engaged = (
-            self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
+            self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, 
+                                     check_height=check_height, check_rot=False)
         )
         rew_dict["curr_engaged"] = curr_engaged.clone().float()
         rew_dict["curr_successes"] = curr_successes.clone().float()
 
         if self.cfg_task.name == "four_hole_insert":
-            # # Compute positional reward
-            # xy_dist = torch.norm(self.held_pos[:, 0:2] - self.fixed_pos[:, 0:2], dim=-1)
-            # xy_dist = torch.max(xy_dist, self.min_xy_dist)
-            # rew_dict["pos_xy_baseline_reward"] = squashing_fn(xy_dist, 25, 4)
-            # rew_dict["pos_xy_baseline_reward"] = torch.clamp(rew_dict["pos_xy_baseline_reward"], max=2.0)
-            # rew_dict["pos_xy_coarse_reward"] = squashing_fn(xy_dist, 55, 2)
-            # rew_dict["pos_xy_coarse_reward"] = torch.clamp(rew_dict["pos_xy_coarse_reward"], max=2.0)
-            # rew_dict["pos_xy_fine_reward"] = squashing_fn(xy_dist, 305, 0)
-            # rew_dict["pos_xy_fine_reward"] = torch.clamp(rew_dict["pos_xy_fine_reward"], max=2.0)
-            # #0.005 / (0.005 + xy_dist)
-
-            # # Compute rotational reward
-            # relative_quat = torch_utils.quat_mul(
-            #     torch_utils.quat_conjugate(self.held_quat), self.fixed_quat
-            # )
-            # rot_error_aa = axis_angle_from_quat(relative_quat)
-            # rot_error_angle = torch.norm(rot_error_aa, p=2, dim=-1) % np.pi # The magnitude of the rotation error
-            # rot_error_angle_comp = torch.pi - rot_error_angle
-            # rot_error_angle = torch.min(rot_error_angle, rot_error_angle_comp)
-            # rot_error_angle = torch.max(rot_error_angle, self.min_rot_error_angle) 
-            # #rew_dict["rot_reward"] = 10 / self.max_rotation * (self.prev_rotational_error - rot_error_angle)
-            # #rew_dict["rot_reward"] = torch.where(rew_dict["rot_reward"] < 0, rew_dict["rot_reward"] * 2, rew_dict["rot_reward"])
-            # rew_dict["rot_reward"] = 0.01 / (0.5 + rot_error_angle)
-            # self.prev_rotational_error = rot_error_angle
-            # #squashing_fn(rot_error_angle, 20, 4)
-            # #0.2 / (0.5 + rot_error_angle)
-
-            # rew_dict["rot_penalty"] = (1.0 - self._check_rot_alignment()) * 0.04
-            # rew_dict["pos_xy_penalty"] = (1.0 - self._check_pos_xy_alignment()) * 0.04
-
-            # # compute z displacement reward
-            # z_disp = torch.max(self.held_pos[:, 2] - self.fixed_pos[:, 2] + self.cfg_task.fixed_asset_cfg.height, self.min_z_disp) #CHANGE
-            # rew_dict["pos_z_reward_xy"] = 0.005 / (0.005 + z_disp)
-            # rew_dict["pos_z_reward_xy"] = torch.where(xy_dist > 0.03, torch.zeros_like(xy_dist), rew_dict["pos_z_reward_xy"])
-            # rew_dict["pos_z_reward_xy"] = torch.clamp(rew_dict["pos_z_reward_xy"], max=1.0)
-
-            # rew_dict["pos_z_reward_rot"] = 0.05 / (0.05 + z_disp)
-            # rew_dict["pos_z_reward_rot"] = torch.where(rot_error_angle > self.cfg_task.hand_init_orn_noise[2], torch.zeros_like(xy_dist), rew_dict["pos_z_reward_rot"])
-
-            # # encourage searching
-            # cur_contacted = self._get_curr_successes(
-            #     success_threshold=1.2, check_rot=False, centered_threshold=0.02
-            # )
-            # rew_dict["curr_contacted"] = cur_contacted.clone().float()
-            # #print(f"current contacts: {rew_dict['curr_contacted'].sum()}/{self.num_envs}")
-            # rew_dict["search_reward"] = torch.norm(self.actions, dim=-1)/12 #0~0.5
-            # rew_dict["search_reward"] = torch.where(~curr_engaged & cur_contacted, rew_dict["search_reward"], torch.zeros_like(rew_dict["search_reward"]))
-
-            # self.cfg_task.action_penalty_scale = 0.0
-            # self.cfg_task.action_grad_penalty_scale = 0.0
-
-            # if(rew_dict['curr_successes'].sum() > 0.0):
-            #     print(f"engaged: {rew_dict['curr_engaged'].sum()}/{self.num_envs}, successes: {rew_dict['curr_successes'].sum()}/{self.num_envs}")
-            
-            # # print(f"[[xy dist: {xy_dist[0]}, rot_error_angle: {rot_error_angle[0]}, z disp: {z_disp[0]}]]")
-            # # print(f"kp_coarse: {rew_dict['kp_coarse'][0]}, "
-            # #         f"kp_baseline: {rew_dict['kp_baseline'][0]}, "
-            # #         f"kp_fine: {rew_dict['kp_fine'][0]}, "
-            # #         f"pos_xy_baseline_reward: {rew_dict['pos_xy_baseline_reward'][0]}, "
-            # #         f"pos_xy_coarse_reward: {rew_dict['pos_xy_coarse_reward'][0]}, "
-            # #         f"pos_xy_fine_reward: {rew_dict['pos_xy_fine_reward'][0]}, "
-            # #         f"pos_z_reward: {rew_dict['pos_z_reward'][0]}, "
-            # #         f"rot_reward: {rew_dict['rot_reward'][0]}, "
-            # #         f"curr_engaged: {rew_dict['curr_engaged'].sum()}, "
-            # #         f"curr_successes: {rew_dict['curr_successes'].sum()}, "
-            # #         f"action_penalty: {(rew_dict['action_penalty'] * self.cfg_task.action_penalty_scale)[0]}, "
-            # #         f"action_grad_penalty: {(rew_dict['action_grad_penalty'] * self.cfg_task.action_grad_penalty_scale)[0]}")
-            # rew_buf = (
-            #     - rew_dict["action_penalty"] * self.cfg_task.action_penalty_scale
-            #     - rew_dict["action_grad_penalty"] * self.cfg_task.action_grad_penalty_scale
-            #     + rew_dict["curr_contacted"]
-            #     + rew_dict["curr_engaged"] * 3
-            #     + rew_dict["curr_successes"] * 2
-            #     + rew_dict["search_reward"]
-            #     #- rew_dict["force_reward"]
-            #     + rew_dict["pos_z_reward_xy"]
-            #     #+ rew_dict["pos_z_reward_rot"]
-            #     + rew_dict["pos_xy_baseline_reward"]
-            #     + rew_dict["pos_xy_coarse_reward"]
-            #     #+ rew_dict["pos_xy_fine_reward"]
-            #     #+ rew_dict["rot_reward"]
-            #     #- rew_dict["rot_penalty"] #uncomment if doesn't work
-            #     #- rew_dict["pos_xy_penalty"]
-            # )
-
             # XY distance reward (multi-scale)
             xy_dist = torch.norm(self.held_pos[:, :2] - self.fixed_pos[:, :2], dim=-1)
             xy_dist = torch.max(xy_dist, self.min_xy_dist)
@@ -778,22 +701,25 @@ class FactoryEnv(DirectRLEnv):
             z_disp = self.held_pos[:, 2] - self.fixed_pos[:, 2]
             z_disp = torch.max(z_disp, self.min_z_disp)
 
-            xy_gate = torch.clamp((0.05 - xy_dist) / 0.05, 0.0, 1.0)
-            rew_dict["z_reward"] = (0.01 / (0.01 + z_disp)) * xy_gate
+            # xy_gate = torch.clamp((0.05 - xy_dist) / 0.05, 0.0, 1.0)
+            # rew_dict["z_reward"] = (0.01 / (0.01 + z_disp)) * xy_gate
+            z_weight = torch.clamp(1.0 - xy_dist / 0.05, 0.0, 1.0)
+            rew_dict["z_reward"] = z_weight * (0.01 / (0.01 + z_disp))
+            rot_gate = torch.clamp((0.3 - rot_error_angle) / 0.3, 0.0, 1.0)
+            rew_dict["z_reward"] *= rot_gate
 
             # Search encouragement (if contacted but not yet engaged)
             cur_contacted = self._get_curr_successes(success_threshold=1.2, check_rot=False, centered_threshold=0.02)
             rew_dict["curr_contacted"] = cur_contacted.clone().float()
 
-            action_search_norm = torch.norm(self.actions[:, [0, 1, 3, 4, 5]])
             rew_dict["search_reward"] = torch.where(
                 (~curr_engaged & cur_contacted),
                 action_norm / 12,
                 torch.zeros_like(action_norm)
             )
 
-            if(rew_dict['curr_successes'].sum() > 0.0):
-                print(f"engaged: {rew_dict['curr_engaged'].sum()}/{self.num_envs}, successes: {rew_dict['curr_successes'].sum()}/{self.num_envs}")
+            # if(rew_dict['curr_successes'].sum() > 0.0):
+            #     print(f"engaged: {rew_dict['curr_engaged'].sum()}/{self.num_envs}, successes: {rew_dict['curr_successes'].sum()}/{self.num_envs}")
 
             # Final reward sum
             rew_buf = (
@@ -804,8 +730,8 @@ class FactoryEnv(DirectRLEnv):
                 + rew_dict["z_reward"] * 1.5
                 + rew_dict["curr_contacted"] * 0.5
                 + rew_dict["curr_engaged"] * 2.0
-                + rew_dict["curr_successes"] * 3.0
-                + rew_dict["search_reward"] * 1.0
+                + rew_dict["curr_successes"] * 5.0
+                + rew_dict["search_reward"] * 0.5
             )
         else:
             rew_buf = (
@@ -816,7 +742,6 @@ class FactoryEnv(DirectRLEnv):
                 - rew_dict["action_grad_penalty"] * self.cfg_task.action_grad_penalty_scale
                 + rew_dict["curr_engaged"]
                 + rew_dict["curr_successes"]
-                + rew_dict["pos_xy_reward"]
             )
 
         for rew_name, rew in rew_dict.items():
@@ -929,6 +854,10 @@ class FactoryEnv(DirectRLEnv):
             held_asset_relative_pos[:, 2] += self.cfg_task.held_asset_cfg.height / 2.0 * 1.1
         elif self.cfg_task.name == "nut_thread":
             held_asset_relative_pos = self.held_base_pos_local
+        elif self.cfg_task.name == "push_t":
+            held_asset_relative_pos = torch.zeros_like(self.held_base_pos_local)
+            held_asset_relative_quat = self.identity_quat.clone()
+            return held_asset_relative_pos, held_asset_relative_quat
         else:
             raise NotImplementedError("Task not implemented")
 
@@ -948,6 +877,8 @@ class FactoryEnv(DirectRLEnv):
     def _set_franka_to_default_pose(self, joints, env_ids):
         """Return Franka to its default joint position."""
         if self.cfg_task.name == "four_hole_insert":
+            gripper_width = self.cfg_task.held_asset_cfg.width / 2 * 1.25
+        elif self.cfg_task.name == "push_t":
             gripper_width = self.cfg_task.held_asset_cfg.width / 2 * 1.25
         else: 
             gripper_width = self.cfg_task.held_asset_cfg.diameter / 2 * 1.25
@@ -987,6 +918,7 @@ class FactoryEnv(DirectRLEnv):
         )
         fixed_pos_init_rand = fixed_pos_init_rand @ torch.diag(fixed_asset_init_pos_rand)
         fixed_state[:, 0:3] += fixed_pos_init_rand + self.scene.env_origins[env_ids]
+
         # (1.b.) Orientation
         fixed_orn_init_yaw = np.deg2rad(self.cfg_task.fixed_asset_init_orn_deg)
         fixed_orn_yaw_range = np.deg2rad(self.cfg_task.fixed_asset_init_orn_range_deg)
@@ -997,6 +929,7 @@ class FactoryEnv(DirectRLEnv):
             fixed_orn_euler[:, 0], fixed_orn_euler[:, 1], fixed_orn_euler[:, 2]
         )
         fixed_state[:, 3:7] = fixed_orn_quat
+
         # (1.c.) Velocity
         fixed_state[:, 7:] = 0.0  # vel
         # (1.d.) Update values.
@@ -1096,10 +1029,7 @@ class FactoryEnv(DirectRLEnv):
         rot_error_angle = torch.max(rot_error_angle, torch.tensor(0.05))
         self.prev_rotational_error = rot_error_angle
         self.max_rotation = rot_error_angle
-
-        if self.cfg_task.name == "four_hole_insert":
-            pass
-
+        
         self.step_sim_no_action()
 
         # Add flanking gears after servo (so arm doesn't move them).
@@ -1119,65 +1049,99 @@ class FactoryEnv(DirectRLEnv):
             self._large_gear_asset.reset()
 
         # (3) Randomize asset-in-gripper location.
-        # flip gripper z orientation
-        flip_z_quat = torch.tensor([0.0, 0.0, 1.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
-        fingertip_flipped_quat, fingertip_flipped_pos = torch_utils.tf_combine(
-            q1=self.fingertip_midpoint_quat,
-            t1=self.fingertip_midpoint_pos,
-            q2=flip_z_quat,
-            t2=torch.zeros_like(self.fingertip_midpoint_pos),
-        )
+        if self.cfg_task.name != "push_t":
+            # flip gripper z orientation
+            flip_z_quat = torch.tensor([0.0, 0.0, 1.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
+            fingertip_flipped_quat, fingertip_flipped_pos = torch_utils.tf_combine(
+                q1=self.fingertip_midpoint_quat,
+                t1=self.fingertip_midpoint_pos,
+                q2=flip_z_quat,
+                t2=torch.zeros_like(self.fingertip_midpoint_pos),
+            )
 
-        # get default gripper in asset transform
-        held_asset_relative_pos, held_asset_relative_quat = self.get_handheld_asset_relative_pose()
-        asset_in_hand_quat, asset_in_hand_pos = torch_utils.tf_inverse(
-            held_asset_relative_quat, held_asset_relative_pos
-        )
+            # get default gripper in asset transform
+            held_asset_relative_pos, held_asset_relative_quat = self.get_handheld_asset_relative_pose()
+            asset_in_hand_quat, asset_in_hand_pos = torch_utils.tf_inverse(
+                held_asset_relative_quat, held_asset_relative_pos
+            )
 
-        translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
-            q1=fingertip_flipped_quat, t1=fingertip_flipped_pos, q2=asset_in_hand_quat, t2=asset_in_hand_pos
-        )
+            translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
+                q1=fingertip_flipped_quat, t1=fingertip_flipped_pos, q2=asset_in_hand_quat, t2=asset_in_hand_pos
+            )
 
-        # Add asset in hand randomization
-        rand_sample = torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device)
-        self.held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
-        if self.cfg_task.name == "gear_mesh":
-            self.held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
+            # Add asset in hand randomization
+            rand_sample = torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device)
+            self.held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
+            if self.cfg_task.name == "gear_mesh":
+                self.held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
 
-        held_asset_pos_noise = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
-        self.held_asset_pos_noise = self.held_asset_pos_noise @ torch.diag(held_asset_pos_noise)
-        translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
-            q1=translated_held_asset_quat,
-            t1=translated_held_asset_pos,
-            q2=self.identity_quat,
-            t2=self.held_asset_pos_noise,
-        )
+            held_asset_pos_noise = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
+            self.held_asset_pos_noise = self.held_asset_pos_noise @ torch.diag(held_asset_pos_noise)
+            translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
+                q1=translated_held_asset_quat,
+                t1=translated_held_asset_pos,
+                q2=self.identity_quat,
+                t2=self.held_asset_pos_noise,
+            )
 
-        held_state = self._held_asset.data.default_root_state.clone()
-        held_state[:, 0:3] = translated_held_asset_pos + self.scene.env_origins
-        held_state[:, 3:7] = translated_held_asset_quat
-        held_state[:, 7:] = 0.0
-        self._held_asset.write_root_pose_to_sim(held_state[:, 0:7])
-        self._held_asset.write_root_velocity_to_sim(held_state[:, 7:])
-        self._held_asset.reset()
+            held_state = self._held_asset.data.default_root_state.clone()
+            held_state[:, 0:3] = translated_held_asset_pos + self.scene.env_origins
+            held_state[:, 3:7] = translated_held_asset_quat
+            held_state[:, 7:] = 0.0
+            self._held_asset.write_root_pose_to_sim(held_state[:, 0:7])
+            self._held_asset.write_root_velocity_to_sim(held_state[:, 7:])
+            self._held_asset.reset()
 
-        #  Close hand
-        # Set gains to use for quick resets.
-        reset_task_prop_gains = torch.tensor(self.cfg.ctrl.reset_task_prop_gains, device=self.device).repeat(
-            (self.num_envs, 1)
-        )
-        reset_rot_deriv_scale = self.cfg.ctrl.reset_rot_deriv_scale
-        self._set_gains(reset_task_prop_gains, reset_rot_deriv_scale)
+            #  Close hand
+            # Set gains to use for quick resets.
+            reset_task_prop_gains = torch.tensor(self.cfg.ctrl.reset_task_prop_gains, device=self.device).repeat(
+                (self.num_envs, 1)
+            )
+            reset_rot_deriv_scale = self.cfg.ctrl.reset_rot_deriv_scale
+            self._set_gains(reset_task_prop_gains, reset_rot_deriv_scale)
 
-        self.step_sim_no_action()
-
-        grasp_time = 0.0
-        while grasp_time < 0.25:
-            self.ctrl_target_joint_pos[env_ids, 7:] = 0.0  # Close gripper.
-            self.ctrl_target_gripper_dof_pos = 0.0
-            self.close_gripper_in_place()
             self.step_sim_no_action()
-            grasp_time += self.sim.get_physics_dt()
+
+            grasp_time = 0.0
+            while grasp_time < 0.25:
+                self.ctrl_target_joint_pos[env_ids, 7:] = 0.0  # Close gripper.
+                self.ctrl_target_gripper_dof_pos = 0.0
+                self.close_gripper_in_place()
+                self.step_sim_no_action()
+                grasp_time += self.sim.get_physics_dt()
+        else:
+            # Set held object on ground
+            held_state = self._held_asset.data.default_root_state.clone()
+
+            # Use the fixed asset (marking) position as reference
+            base_pos = self._fixed_asset.data.root_pos_w - self.scene.env_origins
+
+            # Randomize around it
+            rand_xy = 2 * (torch.rand((self.num_envs, 2), device=self.device) - 0.5)  # [-1, 1]
+            pos_noise_range = torch.tensor([0.05, 0.05], device=self.device)  # 5cm range
+            pos_offset = rand_xy * pos_noise_range
+
+            # Set new held positions on the ground
+            held_state[:, 0] = base_pos[:, 0] + pos_offset[:, 0]
+            held_state[:, 1] = base_pos[:, 1] + pos_offset[:, 1]
+            held_state[:, 2] = base_pos[:, 2]  # same Z as T-marking
+
+            # Orientation randomization (yaw only)
+            yaw_angles = 2 * np.pi * torch.rand((self.num_envs,), device=self.device)
+            held_quat = torch_utils.quat_from_euler_xyz(
+                roll=torch.zeros_like(yaw_angles),
+                pitch=torch.zeros_like(yaw_angles),
+                yaw=yaw_angles,
+            )
+            held_state[:, 3:7] = held_quat
+
+            held_state[:, 7:] = 0.0  # zero velocity
+
+            self._held_asset.write_root_pose_to_sim(held_state[:, 0:7])
+            self._held_asset.write_root_velocity_to_sim(held_state[:, 7:])
+            self._held_asset.reset()
+            
+            self.step_sim_no_action()
 
         self.prev_joint_pos = self.joint_pos[:, 0:7].clone()
         self.prev_fingertip_pos = self.fingertip_midpoint_pos.clone()
@@ -1221,11 +1185,3 @@ class FactoryEnv(DirectRLEnv):
         self._set_gains(self.default_gains)
 
         physics_sim_view.set_gravity(carb.Float3(*self.cfg.sim.gravity))
-
-
-        # target_pos = self.fixed_pos
-        # #target_pos[:, 2] += self.cfg_task.fixed_asset_cfg.base_height + self.cfg_task.fixed_asset_cfg.height
-        # target_rot = torch.stack(torch_utils.get_euler_xyz(self.fixed_quat), dim=1)
-
-        # if self.cfg_task.name == "four_hole_insert":
-        #     self._move_robot_to_target_pos(target_pos, target_rot)

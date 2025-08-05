@@ -12,9 +12,35 @@ from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.utils import configclass
 
-from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert, FourHoleInsert
+from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert, FourHoleInsert, PushT
 
 OBS_DIM_CFG = {
+    "fingertip_pos": 3,
+    "fingertip_pos_rel_fixed": 3,
+    "fingertip_quat": 4,
+    "ee_linvel": 3,
+    "ee_angvel": 3,
+}
+
+STATE_DIM_CFG = {
+    "fingertip_pos": 3,
+    "fingertip_pos_rel_fixed": 3,
+    "fingertip_quat": 4,
+    "ee_linvel": 3,
+    "ee_angvel": 3,
+    "joint_pos": 7,
+    "held_pos": 3,
+    "held_pos_rel_fixed": 3,
+    "held_quat": 4,
+    "fixed_pos": 3,
+    "fixed_quat": 4,
+    "task_prop_gains": 6,
+    "ema_factor": 1,
+    "pos_threshold": 3,
+    "rot_threshold": 3,
+}
+
+OBS_DIM_CFG_FORCE = {
     "fingertip_pos": 3,
     "fingertip_pos_rel_fixed": 3,
     "fingertip_quat": 4,
@@ -26,7 +52,7 @@ OBS_DIM_CFG = {
     "ee_angvel": 3,
 }
 
-STATE_DIM_CFG = {
+STATE_DIM_CFG_FORCE = {
     "fingertip_pos": 3,
     "fingertip_pos_rel_fixed": 3,
     "fingertip_quat": 4,
@@ -47,7 +73,6 @@ STATE_DIM_CFG = {
     "pos_threshold": 3,
     "rot_threshold": 3,
 }
-
 
 @configclass
 class ObsRandCfg:
@@ -85,6 +110,25 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     obs_order: list = [
         "fingertip_pos_rel_fixed", 
         "fingertip_quat", 
+        "ee_linvel", 
+        "ee_angvel",
+    ]
+    state_order: list = [
+        "fingertip_pos",
+        "fingertip_quat",
+        "ee_linvel",
+        "ee_angvel",
+        "joint_pos",
+        "held_pos",
+        "held_pos_rel_fixed",
+        "held_quat",
+        "fixed_pos",
+        "fixed_quat",
+    ]
+    
+    obs_order_force: list = [
+        "fingertip_pos_rel_fixed", 
+        "fingertip_quat", 
         # CODE I WROTE
         "joint_torque",
         "applied_wrench",
@@ -92,7 +136,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         "ee_linvel", 
         "ee_angvel",
     ]
-    state_order: list = [
+    state_order_force: list = [
         "fingertip_pos",
         "fingertip_quat",
         # CODE I WROTE
@@ -220,13 +264,18 @@ class FactoryTaskFourHoleInsertCfg(FactoryEnvCfg):
     task_name = "four_hole_insert"
     task = FourHoleInsert()
     episode_length_s = 55.0
+    
+@configclass
+class FactoryTaskPushTCfg(FactoryEnvCfg):
+    task_name = "push_t"
+    task = PushT()
+    episode_length_s = 20.0
 
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):
     task_name = "gear_mesh"
     task = GearMesh()
     episode_length_s = 20.0
-
 
 @configclass
 class FactoryTaskNutThreadCfg(FactoryEnvCfg):

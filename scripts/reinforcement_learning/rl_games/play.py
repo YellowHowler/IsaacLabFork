@@ -155,6 +155,7 @@ def main():
 
     # set number of actors into agent config
     agent_cfg["params"]["config"]["num_actors"] = env.unwrapped.num_envs
+    
     # create runner from rl-games
     runner = Runner()
     runner.load(agent_cfg)
@@ -204,8 +205,8 @@ def main():
             success_count = curr_successes.sum().item()
 
             # print success and engagement rate every 100 timesteps
-            if timestep % 50 == 0:
-                print(f"Step {timestep}: Successes: {success_count}/{total_count}")
+            if timestep % 20 == 0:
+                print(f"[Step {timestep}] Successes: {success_count}/{total_count}")
 
             # perform operations for terminated episodes
             if len(dones) > 0:
