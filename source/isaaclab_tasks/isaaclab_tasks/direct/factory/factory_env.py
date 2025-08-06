@@ -733,6 +733,37 @@ class FactoryEnv(DirectRLEnv):
                 + rew_dict["curr_successes"] * 5.0
                 + rew_dict["search_reward"] * 0.5
             )
+        elif self.cfg_task.name == "push_t":
+            # XY distance reward
+            xy_dist = torch.norm(self.held_pos[:, :2] - self.fixed_pos[:, :2], dim=-1)
+            xy_dist = torch.max(xy_dist, self.min_xy_dist)
+
+            rew_dict["xy_reward"] = (
+                smooth_reward(xy_dist, 30, 0) * 1.0 +
+                smooth_reward(xy_dist, 80, 0) * 1.5
+            )
+            rew_dict["xy_reward"] = torch.clamp(rew_dict["xy_reward"], max=2.0)
+            
+            # Rotational reward
+            relative_quat = torch_utils.quat_mul(
+                torch_utils.quat_conjugate(self.held_quat), self.fixed_quat
+            )
+            rot_error_aa = axis_angle_from_quat(relative_quat)
+            rot_error_angle = torch.norm(rot_error_aa, dim=-1) % torch.pi
+            rot_error_angle = torch.min(rot_error_angle, torch.pi - rot_error_angle)
+            rot_error_angle = torch.max(rot_error_angle, self.min_rot_error_angle)
+
+            rew_dict["rot_reward"] = smooth_reward(rot_error_angle, 15, 0)
+            rew_dict["rot_reward"] = torch.clamp(rew_dict["rot_reward"], max=1.0)
+            
+            rew_buf = (
+                rew_dict["xy_reward"]
+                + rew_dict["rot_reward"]
+                - rew_dict["action_penalty"] * self.cfg_task.action_penalty_scale
+                - rew_dict["action_grad_penalty"] * self.cfg_task.action_grad_penalty_scale
+                + rew_dict["curr_engaged"]
+                + rew_dict["curr_successes"]
+            )
         else:
             rew_buf = (
                 rew_dict["kp_coarse"]
@@ -1049,8 +1080,7 @@ class FactoryEnv(DirectRLEnv):
             self._large_gear_asset.reset()
 
         # (3) Randomize asset-in-gripper location.
-        if self.cfg_task.name != "push_t":
-            # flip gripper z orientation
+        # flip gripper z orientation
             flip_z_quat = torch.tensor([0.0, 0.0, 1.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1)
             fingertip_flipped_quat, fingertip_flipped_pos = torch_utils.tf_combine(
                 q1=self.fingertip_midpoint_quat,
@@ -1058,7 +1088,8 @@ class FactoryEnv(DirectRLEnv):
                 q2=flip_z_quat,
                 t2=torch.zeros_like(self.fingertip_midpoint_pos),
             )
-
+            
+        if self.cfg_task.name != "push_t":
             # get default gripper in asset transform
             held_asset_relative_pos, held_asset_relative_quat = self.get_handheld_asset_relative_pose()
             asset_in_hand_quat, asset_in_hand_pos = torch_utils.tf_inverse(
@@ -1114,7 +1145,7 @@ class FactoryEnv(DirectRLEnv):
             held_state = self._held_asset.data.default_root_state.clone()
 
             # Use the fixed asset (marking) position as reference
-            base_pos = self._fixed_asset.data.root_pos_w - self.scene.env_origins
+            base_pos = self._fixed_asset.data.root_pos_w
 
             # Randomize around it
             rand_xy = 2 * (torch.rand((self.num_envs, 2), device=self.device) - 0.5)  # [-1, 1]

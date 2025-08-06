@@ -287,19 +287,19 @@ class FourHoleInsert(FactoryTask):
 
 @configclass
 class TShape(HeldAssetCfg):
-    usd_path = f"{ASSET_FOURHOLE_DIR}/inserter_4_hole.usd"
-    width = 0.1
-    length = 0.1
-    height = 0.06
-    base_height = 0.02
+    usd_path = f"{ASSET_FOURHOLE_DIR}/t_shape.usd"
+    width = 0.2
+    length = 0.2
+    height = 0
+    base_height = 0.04
     
 @configclass
 class TMarking(FixedAssetCfg):
     usd_path = f"{ASSET_FOURHOLE_DIR}/base_4_hole.usd"
-    width = 0.1
-    length = 0.1
-    height = 0.06
-    base_height = 0.02
+    width = 0.2
+    length = 0.2
+    height = 0
+    base_height = 0.005
 
 @configclass
 class PushT(FactoryTask):
@@ -354,7 +354,7 @@ class PushT(FactoryTask):
             usd_path=held_asset_cfg.usd_path,
             activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                disable_gravity=True,
+                disable_gravity=False,
                 max_depenetration_velocity=5.0,
                 linear_damping=0.0,
                 angular_damping=0.0,
